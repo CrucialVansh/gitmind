@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "gitmind"
+version = "0.1.0"
+description = "Git-bound coding agent memory — makes your team's AI session reasoning permanent and searchable."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Your Name", email = "you@example.com" }]
+keywords = ["ai", "developer-tools", "git", "llm", "memory", "rag"]
+
+dependencies = [
+    # CLI
+    "click>=8.1",
+    "rich>=13.0",
+
+    # Data models
+    "pydantic>=2.0",
+
+    # Code parsing
+    "tree-sitter>=0.23",
+    "tree-sitter-python>=0.23",
+    "tree-sitter-typescript>=0.23",
+
+    # Retrieval
+    "rank-bm25>=0.2",
+    "sentence-transformers>=3.0",
+    "faiss-cpu>=1.8",
+
+    # LLM
+    "openai>=1.40",
+
+    # Storage
+    "aiosqlite>=0.20",
+
+    # Utilities
+    "python-dotenv>=1.0",
+    "gitpython>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+gitmind = "gitmind.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["gitmind*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
