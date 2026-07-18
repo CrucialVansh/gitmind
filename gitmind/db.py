@@ -12,12 +12,13 @@ Uses aiosqlite for async I/O so the CLI stays responsive during indexing.
 Week 1 task: implement create_tables() and the insert/query methods below.
 """
 
+from datetime import datetime
 import json
 import sqlite3
 from pathlib import Path
 
 from gitmind.config import settings
-from gitmind.models import Commit, CommitSessionPair, Session, SessionChunk
+from gitmind.models import Commit, CommitSessionPair, Session
 
 
 # ── Schema ─────────────────────────────────────────────────────────────────────
@@ -79,6 +80,7 @@ CREATE INDEX IF NOT EXISTS idx_pairs_commit
 
 # ── Database Class ─────────────────────────────────────────────────────────────
 
+
 class GitMindDB:
     """
     Thin wrapper around SQLite.
@@ -118,7 +120,25 @@ class GitMindDB:
 
         TODO (Week 1): implement this.
         """
-        raise NotImplementedError
+        dump = commit.model_dump()
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT OR IGNORE INTO commits "
+                "(hash, short_hash, message, author, timestamp, diff, files_changed, functions_touched)"
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    dump["hash"],
+                    dump["short_hash"],
+                    dump["message"],
+                    dump["author"],
+                    int(dump["timestamp"].timestamp()),
+                    dump["diff"],
+                    json.dumps(dump["files_changed"]),
+                    json.dumps(dump["functions_touched"]),
+                ),
+            )
+            conn.commit()
 
     def get_commit(self, hash: str) -> Commit | None:
         """
@@ -126,7 +146,22 @@ class GitMindDB:
 
         TODO (Week 1): implement this.
         """
-        raise NotImplementedError
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM commits WHERE hash = ?", (hash,))
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return Commit(
+                hash=row["hash"],
+                short_hash=row["short_hash"],
+                message=row["message"],
+                author=row["author"],
+                timestamp=datetime.fromtimestamp(row["timestamp"]),
+                diff=row["diff"],
+                files_changed=json.loads(row["files_changed"]),
+                functions_touched=json.loads(row["functions_touched"]),
+            )
 
     def get_commits_by_file(self, filepath: str) -> list[Commit]:
         """
@@ -135,7 +170,23 @@ class GitMindDB:
 
         TODO (Week 1): implement this.
         """
-        raise NotImplementedError
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM commits WHERE files_changed LIKE ?", (f"%{filepath}%",))
+            rows = cur.fetchall()
+            return [
+                Commit(
+                    hash=row["hash"],
+                    short_hash=row["short_hash"],
+                    message=row["message"],
+                    author=row["author"],
+                    timestamp=datetime.fromtimestamp(row["timestamp"]),
+                    diff=row["diff"],
+                    files_changed=json.loads(row["files_changed"]),
+                    functions_touched=json.loads(row["functions_touched"]),
+                )
+                for row in rows
+            ]
 
     # ── Sessions ───────────────────────────────────────────────────────────────
 
@@ -145,13 +196,42 @@ class GitMindDB:
 
         TODO (Week 1): implement this.
         """
-        raise NotImplementedError
+        dump = session.model_dump()
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT OR IGNORE INTO sessions "
+                "(session_id, source, start_time, end_time, raw_transcript, files_mentioned)"
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    dump["session_id"],
+                    dump["source"],
+                    dump["start_time"],
+                    dump["end_time"],
+                    dump["raw_transcript"],
+                    json.dumps(dump["files_mentioned"]),
+                ),
+            )
+            conn.commit()
 
     def get_session(self, session_id: str) -> Session | None:
         """
         TODO (Week 1): implement this.
         """
-        raise NotImplementedError
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,))
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return Session(
+                session_id=row["session_id"],
+                source=row["source"],
+                start_time=datetime.fromtimestamp(row["start_time"]),
+                end_time=datetime.fromtimestamp(row["end_time"]),
+                raw_transcript=row["raw_transcript"],
+                files_mentioned=json.loads(row["files_mentioned"]),
+            )
 
     def get_sessions_in_window(
         self,
@@ -166,7 +246,24 @@ class GitMindDB:
 
         TODO (Week 1): implement this.
         """
-        raise NotImplementedError
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT * FROM sessions WHERE start_time >= ? AND end_time <= ?",
+                (center_timestamp - window_seconds, center_timestamp + window_seconds),
+            )
+            rows = cur.fetchall()
+            return [
+                Session(
+                    session_id=row["session_id"],
+                    source=row["source"],
+                    start_time=datetime.fromtimestamp(row["start_time"]),
+                    end_time=datetime.fromtimestamp(row["end_time"]),
+                    raw_transcript=row["raw_transcript"],
+                    files_mentioned=json.loads(row["files_mentioned"]),
+                )
+                for row in rows
+            ]
 
     # ── Commit-Session Pairs ────────────────────────────────────────────────────
 
@@ -174,7 +271,21 @@ class GitMindDB:
         """
         TODO (Week 1): implement this.
         """
-        raise NotImplementedError
+        dump = pair.model_dump()
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT OR IGNORE INTO commit_session_pairs "
+                "(pair_id, commit_hash, session_id, relevance_score)"
+                "VALUES (?, ?, ?, ?)",
+                (
+                    dump["pair_id"],
+                    dump["commit_hash"],
+                    dump["session_id"],
+                    dump["relevance_score"],
+                ),
+            )
+            conn.commit()
 
     def get_pairs_for_function(self, function_name: str) -> list[CommitSessionPair]:
         """
@@ -185,7 +296,22 @@ class GitMindDB:
 
         TODO (Week 2): implement this (depends on tree-sitter).
         """
-        raise NotImplementedError
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT * FROM commit_session_pairs WHERE commit_hash IN ( SELECT hash FROM commits WHERE functions_touched LIKE ?)",
+                (f"%{function_name}%",),
+            )
+            rows = cur.fetchall()
+            return [
+                CommitSessionPair(
+                    pair_id=row["pair_id"],
+                    commit_hash=row["commit_hash"],
+                    session_id=row["session_id"],
+                    relevance_score=row["relevance_score"],
+                )
+                for row in rows
+            ]
 
     # ── Stats ──────────────────────────────────────────────────────────────────
 
@@ -196,4 +322,16 @@ class GitMindDB:
 
         TODO (Week 1): implement this.
         """
-        raise NotImplementedError
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM commits")
+            commits = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM sessions")
+            sessions = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM commit_session_pairs")
+            pairs = cur.fetchone()[0]
+            return {
+                "commits": commits,
+                "sessions": sessions,
+                "pairs": pairs,
+            }

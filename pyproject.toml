@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "gitmind"
@@ -19,6 +19,7 @@ dependencies = [
 
     # Data models
     "pydantic>=2.0",
+    "pydantic-settings>=2.0",
 
     # Code parsing
     "tree-sitter>=0.23",
