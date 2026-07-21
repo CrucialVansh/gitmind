@@ -35,8 +35,6 @@ Week 1 TODO list (in order):
   [ ] Write tests in tests/test_session_parser.py
 """
 
-from __future__ import annotations
-
 import re
 from pathlib import Path
 from typing import Iterator
@@ -53,15 +51,17 @@ _FILEPATH_PATTERN = re.compile(
         (?:\.{0,2}/)?       # optional relative prefix (./ or ../)
         [\w\-/]+            # directory path components
         \.                  # must have an extension
-        (?:py|ts|js|go|rs|java|cpp|c|rb|swift|kt|md|yaml|yml|json|toml)
+        (?:py|ts|js|go|rs|java|cpp|c|rb|swift|kt|md|yaml|yml|json|toml|css|tsx|html|pyi|sh|cfg)
     )
     (?:$|[\s'"`):,])        # followed by whitespace or punctuation
     """,
     re.VERBOSE | re.MULTILINE,
 )
 
+MAX_CHUNK_TOKENS = 1000
 
 # ── Cursor ─────────────────────────────────────────────────────────────────────
+
 
 def parse_cursor_sessions(
     workspace_path: Path | None = None,
@@ -112,6 +112,7 @@ def _parse_cursor_row(row: dict) -> Session | None:
 
 # ── Claude ─────────────────────────────────────────────────────────────────────
 
+
 def parse_claude_export(json_path: Path) -> Iterator[Session]:
     """
     Parse a Claude Projects conversation export (JSON format).
@@ -128,6 +129,7 @@ def parse_claude_export(json_path: Path) -> Iterator[Session]:
 
 
 # ── Manual / Markdown ──────────────────────────────────────────────────────────
+
 
 def parse_manual_transcript(file_path: Path) -> Session:
     """
@@ -150,6 +152,7 @@ def parse_manual_transcript(file_path: Path) -> Session:
 
 # ── Chunking ───────────────────────────────────────────────────────────────────
 
+
 def chunk_session(session: Session) -> list[SessionChunk]:
     """
     Split a session into retrievable chunks at turn boundaries.
@@ -168,10 +171,54 @@ def chunk_session(session: Session) -> list[SessionChunk]:
 
     TODO (Week 1): implement this.
     """
-    raise NotImplementedError
+    chunk = session.raw_transcript.split("Human:")
+    chunks = []
+    n = 0
+    count = 1
+    for c in chunk:
+        if not c.strip():
+            continue
+        if len(c.split()) > MAX_CHUNK_TOKENS:
+            while len(c.split()) - n > MAX_CHUNK_TOKENS:
+                chunks.append(
+                    SessionChunk(
+                        chunk_id=session.session_id + "::chunk_" + str(count),
+                        session_id=session.session_id,
+                        text=" ".join(c.split()[n : n + MAX_CHUNK_TOKENS]),
+                        turn_index=len(chunks),
+                        files_mentioned=extract_files_mentioned(c),
+                    )
+                )
+                n += MAX_CHUNK_TOKENS
+                count += 1
+            chunks.append(
+                SessionChunk(
+                    chunk_id=session.session_id + "::chunk_" + str(count),
+                    session_id=session.session_id,
+                    text=" ".join(c.split()[n:]),
+                    turn_index=len(chunks),
+                    files_mentioned=extract_files_mentioned(c),
+                )
+            )
+            n = 0
+            count += 1
+        else:
+            chunks.append(
+                SessionChunk(
+                    chunk_id=session.session_id + "::chunk_" + str(count),
+                    session_id=session.session_id,
+                    text=c,
+                    turn_index=len(chunks),
+                    files_mentioned=extract_files_mentioned(c),
+                )
+            )
+            count += 1
+
+    return chunks
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 def extract_files_mentioned(text: str) -> list[str]:
     """
@@ -191,4 +238,4 @@ def extract_files_mentioned(text: str) -> list[str]:
 
     TODO (Week 1): implement this — it's used by both parsers and the linker.
     """
-    raise NotImplementedError
+    return list(dict.fromkeys(re.findall(_FILEPATH_PATTERN, text)))

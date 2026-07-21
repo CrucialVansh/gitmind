@@ -43,7 +43,8 @@ def sample_session() -> Session:
 
 # ── Tests for extract_files_mentioned ─────────────────────────────────────────
 
-@pytest.mark.skip(reason="TODO Week 1: implement extract_files_mentioned first")
+
+# @pytest.mark.skip(reason="TODO Week 1: implement extract_files_mentioned first")
 def test_extract_files_mentioned_basic():
     text = "I edited src/api.py and tests/test_api.py today."
     result = extract_files_mentioned(text)
@@ -51,21 +52,21 @@ def test_extract_files_mentioned_basic():
     assert "tests/test_api.py" in result
 
 
-@pytest.mark.skip(reason="TODO Week 1: implement extract_files_mentioned first")
+# @pytest.mark.skip(reason="TODO Week 1: implement extract_files_mentioned first")
 def test_extract_files_mentioned_deduplicates():
     text = "src/api.py was mentioned and src/api.py again."
     result = extract_files_mentioned(text)
     assert result.count("src/api.py") == 1
 
 
-@pytest.mark.skip(reason="TODO Week 1: implement extract_files_mentioned first")
+# @pytest.mark.skip(reason="TODO Week 1: implement extract_files_mentioned first")
 def test_extract_files_mentioned_ignores_non_paths():
     text = "The quick brown fox jumps over the lazy dog."
     result = extract_files_mentioned(text)
     assert result == []
 
 
-@pytest.mark.skip(reason="TODO Week 1: implement extract_files_mentioned first")
+# @pytest.mark.skip(reason="TODO Week 1: implement extract_files_mentioned first")
 def test_extract_files_mentioned_multiple_extensions():
     text = "Modified main.go, styles.css, and components/Button.tsx"
     result = extract_files_mentioned(text)
@@ -74,20 +75,21 @@ def test_extract_files_mentioned_multiple_extensions():
 
 # ── Tests for chunk_session ───────────────────────────────────────────────────
 
-@pytest.mark.skip(reason="TODO Week 1: implement chunk_session first")
+
+# @pytest.mark.skip(reason="TODO Week 1: implement chunk_session first")
 def test_chunk_session_produces_chunks(sample_session):
     chunks = chunk_session(sample_session)
     assert len(chunks) > 0
 
 
-@pytest.mark.skip(reason="TODO Week 1: implement chunk_session first")
+# @pytest.mark.skip(reason="TODO Week 1: implement chunk_session first")
 def test_chunk_has_unique_ids(sample_session):
     chunks = chunk_session(sample_session)
     ids = [c.chunk_id for c in chunks]
     assert len(ids) == len(set(ids)), "Chunk IDs must be unique"
 
 
-@pytest.mark.skip(reason="TODO Week 1: implement chunk_session first")
+##@pytest.mark.skip(reason="TODO Week 1: implement chunk_session first")
 def test_chunk_ids_reference_session(sample_session):
     chunks = chunk_session(sample_session)
     for chunk in chunks:
@@ -95,7 +97,7 @@ def test_chunk_ids_reference_session(sample_session):
         assert sample_session.session_id in chunk.chunk_id
 
 
-@pytest.mark.skip(reason="TODO Week 1: implement chunk_session first")
+# @pytest.mark.skip(reason="TODO Week 1: implement chunk_session first")
 def test_chunks_mention_files(sample_session):
     chunks = chunk_session(sample_session)
     # At least one chunk should mention src/api.py
@@ -103,7 +105,7 @@ def test_chunks_mention_files(sample_session):
     assert "src/api.py" in mentioned
 
 
-@pytest.mark.skip(reason="TODO Week 1: implement chunk_session first")
+# @pytest.mark.skip(reason="TODO Week 1: implement chunk_session first")
 def test_chunk_embedding_is_none_before_week2(sample_session):
     chunks = chunk_session(sample_session)
     for chunk in chunks:
