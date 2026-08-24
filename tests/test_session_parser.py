@@ -1,8 +1,6 @@
 """
 Tests for gitmind/parsers/session_parser.py
 
-Week 1: write these tests alongside your implementation.
-
 Run with:  pytest tests/test_session_parser.py -v
 """
 
@@ -12,6 +10,8 @@ from pathlib import Path
 from gitmind.parsers.session_parser import (
     extract_files_mentioned,
     chunk_session,
+    parse_manual_transcript,
+    parse_claude_export,
 )
 from gitmind.models import Session, SessionSource
 from datetime import datetime, timezone
@@ -44,7 +44,6 @@ def sample_session() -> Session:
 # ── Tests for extract_files_mentioned ─────────────────────────────────────────
 
 
-# @pytest.mark.skip(reason="TODO Week 1: implement extract_files_mentioned first")
 def test_extract_files_mentioned_basic():
     text = "I edited src/api.py and tests/test_api.py today."
     result = extract_files_mentioned(text)
@@ -52,44 +51,44 @@ def test_extract_files_mentioned_basic():
     assert "tests/test_api.py" in result
 
 
-# @pytest.mark.skip(reason="TODO Week 1: implement extract_files_mentioned first")
 def test_extract_files_mentioned_deduplicates():
     text = "src/api.py was mentioned and src/api.py again."
     result = extract_files_mentioned(text)
     assert result.count("src/api.py") == 1
 
 
-# @pytest.mark.skip(reason="TODO Week 1: implement extract_files_mentioned first")
 def test_extract_files_mentioned_ignores_non_paths():
     text = "The quick brown fox jumps over the lazy dog."
     result = extract_files_mentioned(text)
     assert result == []
 
 
-# @pytest.mark.skip(reason="TODO Week 1: implement extract_files_mentioned first")
 def test_extract_files_mentioned_multiple_extensions():
     text = "Modified main.go, styles.css, and components/Button.tsx"
     result = extract_files_mentioned(text)
     assert len(result) == 3
 
 
+def test_extract_files_mentioned_sorted():
+    text = "Check out utils/helpers.py and api/routes.py and auth/login.py"
+    result = extract_files_mentioned(text)
+    assert result == sorted(result)
+
+
 # ── Tests for chunk_session ───────────────────────────────────────────────────
 
 
-# @pytest.mark.skip(reason="TODO Week 1: implement chunk_session first")
 def test_chunk_session_produces_chunks(sample_session):
     chunks = chunk_session(sample_session)
     assert len(chunks) > 0
 
 
-# @pytest.mark.skip(reason="TODO Week 1: implement chunk_session first")
 def test_chunk_has_unique_ids(sample_session):
     chunks = chunk_session(sample_session)
     ids = [c.chunk_id for c in chunks]
     assert len(ids) == len(set(ids)), "Chunk IDs must be unique"
 
 
-##@pytest.mark.skip(reason="TODO Week 1: implement chunk_session first")
 def test_chunk_ids_reference_session(sample_session):
     chunks = chunk_session(sample_session)
     for chunk in chunks:
@@ -97,7 +96,6 @@ def test_chunk_ids_reference_session(sample_session):
         assert sample_session.session_id in chunk.chunk_id
 
 
-# @pytest.mark.skip(reason="TODO Week 1: implement chunk_session first")
 def test_chunks_mention_files(sample_session):
     chunks = chunk_session(sample_session)
     # At least one chunk should mention src/api.py
@@ -105,8 +103,62 @@ def test_chunks_mention_files(sample_session):
     assert "src/api.py" in mentioned
 
 
-# @pytest.mark.skip(reason="TODO Week 1: implement chunk_session first")
 def test_chunk_embedding_is_none_before_week2(sample_session):
     chunks = chunk_session(sample_session)
     for chunk in chunks:
         assert chunk.embedding is None, "Embeddings are set in Week 2, not Week 1"
+
+
+def test_chunk_text_is_not_empty(sample_session):
+    chunks = chunk_session(sample_session)
+    for chunk in chunks:
+        assert chunk.text.strip(), "Chunk text should not be empty"
+
+
+# ── Tests for parse_manual_transcript ─────────────────────────────────────────
+
+
+def test_parse_manual_transcript(tmp_path):
+    """Should parse a manual transcript file into a Session."""
+    transcript = (
+        "Human: How should we handle authentication?\n\n"
+        "Assistant: We should use JWT tokens with refresh tokens.\n\n"
+        "Human: What about the token expiry?\n\n"
+        "Assistant: Set access tokens to 15 minutes, refresh tokens to 7 days."
+    )
+    file_path = tmp_path / "session.md"
+    file_path.write_text(transcript)
+
+    session = parse_manual_transcript(file_path)
+
+    assert session.session_id.startswith("manual-")
+    assert session.source == SessionSource.MANUAL
+    assert "authentication" in session.raw_transcript.lower()
+
+
+# ── Tests for parse_claude_export ─────────────────────────────────────────────
+
+
+def test_parse_claude_export_basic(tmp_path):
+    """Should parse a Claude export JSON file."""
+    export_data = [
+        {
+            "uuid": "conv-123",
+            "name": "API Design Discussion",
+            "created_at": "2025-11-14T10:00:00Z",
+            "updated_at": "2025-11-14T11:00:00Z",
+            "chat_messages": [
+                {"sender": "human", "text": "Let's discuss the API for src/routes.py"},
+                {"sender": "assistant", "text": "Sure, we should use RESTful patterns."},
+            ],
+        }
+    ]
+    json_path = tmp_path / "conversations.json"
+    import json
+    json_path.write_text(json.dumps(export_data))
+
+    sessions = list(parse_claude_export(json_path))
+
+    assert len(sessions) == 1
+    assert sessions[0].source == SessionSource.CLAUDE
+    assert "src/routes.py" in sessions[0].files_mentioned

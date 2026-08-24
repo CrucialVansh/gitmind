@@ -8,17 +8,16 @@ Classifies a user query into one of three retrieval intents:
 
 Uses a simple regex pattern matcher — no ML needed.
 This keeps the router fast (<1ms) and fully interpretable.
-
-TODO (Week 3):
-  [ ] Implement route() with the regex pattern tables
-  [ ] Add logging to track which intent queries are classified as
-  [ ] Write tests covering edge cases
 """
 
 from __future__ import annotations
+
+import logging
 import re
+
 from gitmind.models import QueryIntent
 
+logger = logging.getLogger(__name__)
 
 # Pattern tables — order matters (first match wins)
 _PATTERNS: list[tuple[QueryIntent, list[str]]] = [
@@ -55,7 +54,15 @@ def route(query: str) -> QueryIntent:
 
     Returns:
         QueryIntent enum value.
-
-    TODO (Week 3): implement this.
     """
-    raise NotImplementedError("Week 3")
+    query_lower = query.lower().strip()
+
+    for intent, patterns in _PATTERNS:
+        for pattern in patterns:
+            if re.search(pattern, query_lower):
+                logger.debug("Routed query to %s (matched: %s)", intent.value, pattern)
+                return intent
+
+    # Default to EPISODE for unmatched queries
+    logger.debug("No pattern matched — defaulting to EPISODE")
+    return QueryIntent.EPISODE

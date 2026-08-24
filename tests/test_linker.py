@@ -1,8 +1,6 @@
 """
 Tests for gitmind/linker.py
 
-Week 1: write these tests alongside your implementation.
-
 Run with:  pytest tests/test_linker.py -v
 """
 
@@ -11,11 +9,13 @@ from datetime import datetime, timezone, timedelta
 
 from gitmind.linker import (
     link_commit,
+    link_all,
     _is_in_time_window,
     _compute_relevance_score,
+    _extract_relevant_chunks,
     MIN_PAIR_SCORE,
 )
-from gitmind.models import Commit, Session, SessionSource
+from gitmind.models import Commit, Session, SessionChunk, SessionSource
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ def matching_session() -> Session:
         source=SessionSource.CURSOR,
         start_time=BASE_TIME - timedelta(hours=1),
         end_time=BASE_TIME - timedelta(minutes=10),  # ended 10min before commit
-        raw_transcript="We discussed src/api.py retry logic. The vendor said...",
+        raw_transcript="Human: We discussed src/api.py retry logic. The vendor said...\n\nAssistant: Yes, we should only retry on 503.",
         files_mentioned=["src/api.py"],
     )
 
@@ -58,7 +58,7 @@ def non_overlapping_session() -> Session:
         source=SessionSource.CURSOR,
         start_time=BASE_TIME - timedelta(hours=1),
         end_time=BASE_TIME - timedelta(minutes=10),
-        raw_transcript="Worked on styles.css and index.html today.",
+        raw_transcript="Human: Worked on styles.css and index.html today.\n\nAssistant: Great, the CSS looks good.",
         files_mentioned=["styles.css", "index.html"],
     )
 
@@ -71,46 +71,77 @@ def out_of_window_session() -> Session:
         source=SessionSource.CURSOR,
         start_time=BASE_TIME - timedelta(days=7),
         end_time=BASE_TIME - timedelta(days=6),  # a week before the commit
-        raw_transcript="Edited src/api.py for a different reason.",
+        raw_transcript="Human: Edited src/api.py for a different reason.\n\nAssistant: OK.",
         files_mentioned=["src/api.py"],
     )
 
 
 # ── Tests for _is_in_time_window ──────────────────────────────────────────────
 
-@pytest.mark.skip(reason="TODO Week 1: implement _is_in_time_window first")
 def test_session_in_window(sample_commit, matching_session):
     assert _is_in_time_window(sample_commit, matching_session) is True
 
 
-@pytest.mark.skip(reason="TODO Week 1: implement _is_in_time_window first")
 def test_session_out_of_window(sample_commit, out_of_window_session):
     assert _is_in_time_window(sample_commit, out_of_window_session) is False
 
 
+def test_session_at_boundary(sample_commit):
+    """Session ending exactly at the window boundary should be included."""
+    from gitmind.config import settings
+    boundary_session = Session(
+        session_id="session-boundary",
+        source=SessionSource.CURSOR,
+        start_time=BASE_TIME - timedelta(hours=3),
+        end_time=BASE_TIME - timedelta(seconds=settings.link_time_window_seconds),
+        raw_transcript="Human: test",
+        files_mentioned=["src/api.py"],
+    )
+    assert _is_in_time_window(sample_commit, boundary_session) is True
+
+
 # ── Tests for _compute_relevance_score ────────────────────────────────────────
 
-@pytest.mark.skip(reason="TODO Week 1: implement _compute_relevance_score first")
 def test_score_above_minimum_for_match(sample_commit, matching_session):
     score = _compute_relevance_score(sample_commit, matching_session)
     assert score >= MIN_PAIR_SCORE
 
 
-@pytest.mark.skip(reason="TODO Week 1: implement _compute_relevance_score first")
 def test_score_is_zero_for_no_file_overlap(sample_commit, non_overlapping_session):
     score = _compute_relevance_score(sample_commit, non_overlapping_session)
-    assert score < MIN_PAIR_SCORE
+    assert score == 0.0
 
 
-@pytest.mark.skip(reason="TODO Week 1: implement _compute_relevance_score first")
 def test_score_in_valid_range(sample_commit, matching_session):
     score = _compute_relevance_score(sample_commit, matching_session)
     assert 0.0 <= score <= 1.0
 
 
+def test_score_increases_with_more_files(sample_commit):
+    """More file overlaps should increase the score."""
+    single_file_session = Session(
+        session_id="s1",
+        source=SessionSource.CURSOR,
+        start_time=BASE_TIME - timedelta(hours=1),
+        end_time=BASE_TIME - timedelta(minutes=10),
+        raw_transcript="test",
+        files_mentioned=["src/api.py"],
+    )
+    multi_file_session = Session(
+        session_id="s2",
+        source=SessionSource.CURSOR,
+        start_time=BASE_TIME - timedelta(hours=1),
+        end_time=BASE_TIME - timedelta(minutes=10),
+        raw_transcript="test",
+        files_mentioned=["src/api.py", "tests/test_api.py"],
+    )
+    score1 = _compute_relevance_score(sample_commit, single_file_session)
+    score2 = _compute_relevance_score(sample_commit, multi_file_session)
+    assert score2 > score1
+
+
 # ── Tests for link_commit ─────────────────────────────────────────────────────
 
-@pytest.mark.skip(reason="TODO Week 1: implement link_commit first")
 def test_link_commit_finds_matching_session(
     sample_commit, matching_session, non_overlapping_session
 ):
@@ -119,19 +150,34 @@ def test_link_commit_finds_matching_session(
     assert pairs[0].session_id == matching_session.session_id
 
 
-@pytest.mark.skip(reason="TODO Week 1: implement link_commit first")
 def test_link_commit_returns_empty_for_no_match(sample_commit, non_overlapping_session):
     pairs = link_commit(sample_commit, [non_overlapping_session])
     assert pairs == []
 
 
-@pytest.mark.skip(reason="TODO Week 1: implement link_commit first")
 def test_link_commit_excludes_out_of_window(sample_commit, out_of_window_session):
     pairs = link_commit(sample_commit, [out_of_window_session])
     assert pairs == []
 
 
-@pytest.mark.skip(reason="TODO Week 1: implement link_commit first")
 def test_pair_id_format(sample_commit, matching_session):
     pairs = link_commit(sample_commit, [matching_session])
     assert pairs[0].pair_id == f"{sample_commit.hash}::{matching_session.session_id}"
+
+
+def test_pair_has_chunks(sample_commit, matching_session):
+    pairs = link_commit(sample_commit, [matching_session])
+    assert len(pairs) == 1
+    assert len(pairs[0].session_chunks) > 0
+
+
+# ── Tests for link_all ────────────────────────────────────────────────────────
+
+def test_link_all_basic(sample_commit, matching_session, non_overlapping_session):
+    pairs = link_all([sample_commit], [matching_session, non_overlapping_session])
+    assert len(pairs) == 1
+
+
+def test_link_all_returns_empty_when_no_sessions(sample_commit):
+    pairs = link_all([sample_commit], [])
+    assert pairs == []

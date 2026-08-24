@@ -7,18 +7,16 @@ Handles schema creation, migrations, and CRUD operations for:
   - session_chunks
   - commit_session_pairs
 
-Uses aiosqlite for async I/O so the CLI stays responsive during indexing.
-
-Week 1 task: implement create_tables() and the insert/query methods below.
+Uses synchronous sqlite3 for the CLI.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import sqlite3
 from pathlib import Path
 
 from gitmind.config import settings
-from gitmind.models import Commit, CommitSessionPair, Session
+from gitmind.models import Commit, CommitSessionPair, Session, SessionChunk
 
 
 # ── Schema ─────────────────────────────────────────────────────────────────────
@@ -105,133 +103,131 @@ class GitMindDB:
         """
         Create all tables and indexes.
         Safe to call multiple times (uses CREATE IF NOT EXISTS).
-
-        TODO (Week 1): call this from `gitmind index` before inserting data.
         """
         settings.ensure_data_dir()
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(SCHEMA_SQL)
 
     # ── Commits ────────────────────────────────────────────────────────────────
 
     def insert_commit(self, commit: Commit) -> None:
-        """
-        Insert a single commit. Ignores duplicates (IGNORE conflict).
-
-        TODO (Week 1): implement this.
-        """
-        dump = commit.model_dump()
+        """Insert a single commit. Ignores duplicates (IGNORE conflict)."""
         with self._connect() as conn:
             cur = conn.cursor()
             cur.execute(
                 "INSERT OR IGNORE INTO commits "
-                "(hash, short_hash, message, author, timestamp, diff, files_changed, functions_touched)"
+                "(hash, short_hash, message, author, timestamp, diff, files_changed, functions_touched) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    dump["hash"],
-                    dump["short_hash"],
-                    dump["message"],
-                    dump["author"],
-                    int(dump["timestamp"].timestamp()),
-                    dump["diff"],
-                    json.dumps(dump["files_changed"]),
-                    json.dumps(dump["functions_touched"]),
+                    commit.hash,
+                    commit.short_hash,
+                    commit.message,
+                    commit.author,
+                    int(commit.timestamp.timestamp()),
+                    commit.diff,
+                    json.dumps(commit.files_changed),
+                    json.dumps(commit.functions_touched),
                 ),
             )
             conn.commit()
 
     def get_commit(self, hash: str) -> Commit | None:
-        """
-        Fetch a commit by its full hash.
-
-        TODO (Week 1): implement this.
-        """
+        """Fetch a commit by its full hash."""
         with self._connect() as conn:
             cur = conn.cursor()
             cur.execute("SELECT * FROM commits WHERE hash = ?", (hash,))
             row = cur.fetchone()
             if row is None:
                 return None
-            return Commit(
-                hash=row["hash"],
-                short_hash=row["short_hash"],
-                message=row["message"],
-                author=row["author"],
-                timestamp=datetime.fromtimestamp(row["timestamp"]),
-                diff=row["diff"],
-                files_changed=json.loads(row["files_changed"]),
-                functions_touched=json.loads(row["functions_touched"]),
-            )
+            return _row_to_commit(row)
+
+    def get_all_commits(self) -> list[Commit]:
+        """Return all indexed commits, newest first."""
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM commits ORDER BY timestamp DESC")
+            return [_row_to_commit(row) for row in cur.fetchall()]
 
     def get_commits_by_file(self, filepath: str) -> list[Commit]:
         """
         Return all commits that touched a given filepath.
         Used by the Decision Synthesizer to build the timeline.
-
-        TODO (Week 1): implement this.
         """
         with self._connect() as conn:
             cur = conn.cursor()
-            cur.execute("SELECT * FROM commits WHERE files_changed LIKE ?", (f"%{filepath}%",))
-            rows = cur.fetchall()
-            return [
-                Commit(
-                    hash=row["hash"],
-                    short_hash=row["short_hash"],
-                    message=row["message"],
-                    author=row["author"],
-                    timestamp=datetime.fromtimestamp(row["timestamp"]),
-                    diff=row["diff"],
-                    files_changed=json.loads(row["files_changed"]),
-                    functions_touched=json.loads(row["functions_touched"]),
-                )
-                for row in rows
-            ]
+            cur.execute(
+                "SELECT * FROM commits WHERE files_changed LIKE ? ORDER BY timestamp DESC",
+                (f"%{filepath}%",),
+            )
+            return [_row_to_commit(row) for row in cur.fetchall()]
 
     # ── Sessions ───────────────────────────────────────────────────────────────
 
     def insert_session(self, session: Session) -> None:
-        """
-        Insert a session and all its chunks.
-
-        TODO (Week 1): implement this.
-        """
-        dump = session.model_dump()
+        """Insert a session and all its chunks."""
         with self._connect() as conn:
             cur = conn.cursor()
+
+            # Insert the session itself
             cur.execute(
                 "INSERT OR IGNORE INTO sessions "
-                "(session_id, source, start_time, end_time, raw_transcript, files_mentioned)"
+                "(session_id, source, start_time, end_time, raw_transcript, files_mentioned) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (
-                    dump["session_id"],
-                    dump["source"],
-                    dump["start_time"],
-                    dump["end_time"],
-                    dump["raw_transcript"],
-                    json.dumps(dump["files_mentioned"]),
+                    session.session_id,
+                    session.source.value if hasattr(session.source, 'value') else str(session.source),
+                    int(session.start_time.timestamp()),
+                    int(session.end_time.timestamp()),
+                    session.raw_transcript,
+                    json.dumps(session.files_mentioned),
                 ),
             )
+
+            # Insert all chunks
+            for chunk in session.chunks:
+                cur.execute(
+                    "INSERT OR IGNORE INTO session_chunks "
+                    "(chunk_id, session_id, text, turn_index, files_mentioned, embedding) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        chunk.chunk_id,
+                        chunk.session_id,
+                        chunk.text,
+                        chunk.turn_index,
+                        json.dumps(chunk.files_mentioned),
+                        None,  # embedding set in Week 2
+                    ),
+                )
+
             conn.commit()
 
     def get_session(self, session_id: str) -> Session | None:
-        """
-        TODO (Week 1): implement this.
-        """
+        """Fetch a session by its ID, including its chunks."""
         with self._connect() as conn:
             cur = conn.cursor()
             cur.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,))
             row = cur.fetchone()
             if row is None:
                 return None
-            return Session(
-                session_id=row["session_id"],
-                source=row["source"],
-                start_time=datetime.fromtimestamp(row["start_time"]),
-                end_time=datetime.fromtimestamp(row["end_time"]),
-                raw_transcript=row["raw_transcript"],
-                files_mentioned=json.loads(row["files_mentioned"]),
+
+            session = _row_to_session(row)
+
+            # Load chunks
+            cur.execute(
+                "SELECT * FROM session_chunks WHERE session_id = ? ORDER BY turn_index",
+                (session_id,),
             )
+            session.chunks = [_row_to_chunk(r) for r in cur.fetchall()]
+
+            return session
+
+    def get_all_sessions(self) -> list[Session]:
+        """Return all indexed sessions, newest first."""
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM sessions ORDER BY start_time DESC")
+            return [_row_to_session(row) for row in cur.fetchall()]
 
     def get_sessions_in_window(
         self,
@@ -243,75 +239,78 @@ class GitMindDB:
         [center_timestamp - window, center_timestamp + window].
 
         Used by the linker to find sessions near a commit.
-
-        TODO (Week 1): implement this.
         """
+        lo = center_timestamp - window_seconds
+        hi = center_timestamp + window_seconds
         with self._connect() as conn:
             cur = conn.cursor()
+            # A session overlaps the window if it starts before the window ends
+            # AND ends after the window starts
             cur.execute(
-                "SELECT * FROM sessions WHERE start_time >= ? AND end_time <= ?",
-                (center_timestamp - window_seconds, center_timestamp + window_seconds),
+                "SELECT * FROM sessions WHERE start_time <= ? AND end_time >= ?",
+                (hi, lo),
             )
-            rows = cur.fetchall()
-            return [
-                Session(
-                    session_id=row["session_id"],
-                    source=row["source"],
-                    start_time=datetime.fromtimestamp(row["start_time"]),
-                    end_time=datetime.fromtimestamp(row["end_time"]),
-                    raw_transcript=row["raw_transcript"],
-                    files_mentioned=json.loads(row["files_mentioned"]),
-                )
-                for row in rows
-            ]
+            return [_row_to_session(row) for row in cur.fetchall()]
+
+    # ── Session Chunks ──────────────────────────────────────────────────────────
+
+    def get_all_chunks(self) -> list[SessionChunk]:
+        """Return all session chunks."""
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM session_chunks ORDER BY session_id, turn_index")
+            return [_row_to_chunk(row) for row in cur.fetchall()]
 
     # ── Commit-Session Pairs ────────────────────────────────────────────────────
 
     def insert_pair(self, pair: CommitSessionPair) -> None:
-        """
-        TODO (Week 1): implement this.
-        """
-        dump = pair.model_dump()
+        """Insert a commit-session pair with its chunk IDs."""
         with self._connect() as conn:
             cur = conn.cursor()
+            chunk_ids = [c.chunk_id for c in pair.session_chunks]
             cur.execute(
                 "INSERT OR IGNORE INTO commit_session_pairs "
-                "(pair_id, commit_hash, session_id, relevance_score)"
-                "VALUES (?, ?, ?, ?)",
+                "(pair_id, commit_hash, session_id, relevance_score, chunk_ids) "
+                "VALUES (?, ?, ?, ?, ?)",
                 (
-                    dump["pair_id"],
-                    dump["commit_hash"],
-                    dump["session_id"],
-                    dump["relevance_score"],
+                    pair.pair_id,
+                    pair.commit.hash,
+                    pair.session_id,
+                    pair.relevance_score,
+                    json.dumps(chunk_ids),
                 ),
             )
             conn.commit()
 
-    def get_pairs_for_function(self, function_name: str) -> list[CommitSessionPair]:
+    def get_pairs_for_commit(self, commit_hash: str) -> list[dict]:
+        """Return all pairs for a given commit hash."""
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT * FROM commit_session_pairs WHERE commit_hash = ?",
+                (commit_hash,),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+    def get_pairs_for_function(self, function_name: str) -> list[dict]:
         """
-        Return all (commit, session) pairs where the commit touched
+        Return all (commit, session) pair records where the commit touched
         the given function. Used by the Decision Synthesizer.
 
-        Requires that commits.functions_touched is populated (Week 2).
-
-        TODO (Week 2): implement this (depends on tree-sitter).
+        Returns lightweight dicts rather than full CommitSessionPair objects
+        to avoid the circular loading problem.
         """
         with self._connect() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT * FROM commit_session_pairs WHERE commit_hash IN ( SELECT hash FROM commits WHERE functions_touched LIKE ?)",
+                """SELECT csp.*, c.timestamp as commit_timestamp, c.message as commit_message
+                   FROM commit_session_pairs csp
+                   JOIN commits c ON csp.commit_hash = c.hash
+                   WHERE c.functions_touched LIKE ?
+                   ORDER BY c.timestamp DESC""",
                 (f"%{function_name}%",),
             )
-            rows = cur.fetchall()
-            return [
-                CommitSessionPair(
-                    pair_id=row["pair_id"],
-                    commit_hash=row["commit_hash"],
-                    session_id=row["session_id"],
-                    relevance_score=row["relevance_score"],
-                )
-                for row in rows
-            ]
+            return [dict(row) for row in cur.fetchall()]
 
     # ── Stats ──────────────────────────────────────────────────────────────────
 
@@ -319,19 +318,66 @@ class GitMindDB:
         """
         Return row counts for all tables.
         Used by `gitmind status` to show index health.
-
-        TODO (Week 1): implement this.
         """
         with self._connect() as conn:
             cur = conn.cursor()
+
             cur.execute("SELECT COUNT(*) FROM commits")
             commits = cur.fetchone()[0]
+
             cur.execute("SELECT COUNT(*) FROM sessions")
             sessions = cur.fetchone()[0]
+
+            cur.execute("SELECT COUNT(*) FROM session_chunks")
+            chunks = cur.fetchone()[0]
+
             cur.execute("SELECT COUNT(*) FROM commit_session_pairs")
             pairs = cur.fetchone()[0]
+
             return {
                 "commits": commits,
                 "sessions": sessions,
+                "chunks": chunks,
                 "pairs": pairs,
             }
+
+
+# ── Helper functions ──────────────────────────────────────────────────────────
+
+
+def _row_to_commit(row: sqlite3.Row) -> Commit:
+    """Convert a database row to a Commit model."""
+    return Commit(
+        hash=row["hash"],
+        short_hash=row["short_hash"],
+        message=row["message"],
+        author=row["author"],
+        timestamp=datetime.fromtimestamp(row["timestamp"], tz=timezone.utc),
+        diff=row["diff"],
+        files_changed=json.loads(row["files_changed"]),
+        functions_touched=json.loads(row["functions_touched"]),
+    )
+
+
+def _row_to_session(row: sqlite3.Row) -> Session:
+    """Convert a database row to a Session model."""
+    return Session(
+        session_id=row["session_id"],
+        source=row["source"],
+        start_time=datetime.fromtimestamp(row["start_time"], tz=timezone.utc),
+        end_time=datetime.fromtimestamp(row["end_time"], tz=timezone.utc),
+        raw_transcript=row["raw_transcript"],
+        files_mentioned=json.loads(row["files_mentioned"]),
+    )
+
+
+def _row_to_chunk(row: sqlite3.Row) -> SessionChunk:
+    """Convert a database row to a SessionChunk model."""
+    return SessionChunk(
+        chunk_id=row["chunk_id"],
+        session_id=row["session_id"],
+        text=row["text"],
+        turn_index=row["turn_index"],
+        files_mentioned=json.loads(row["files_mentioned"]),
+        embedding=None,  # loaded separately when needed
+    )

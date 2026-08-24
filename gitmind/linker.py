@@ -24,20 +24,18 @@ Scoring:
         - Result is clamped to [0.0, 1.0]
 
     Only pairs with relevance_score >= MIN_PAIR_SCORE are kept.
-
-Week 1 TODO list (in order):
-  [ ] Implement link_commit() with the timestamp + filepath overlap logic
-  [ ] Implement _compute_relevance_score() using the scoring formula above
-  [ ] Implement _extract_relevant_chunks() to filter chunks by file mention
-  [ ] Implement link_all() as a loop over link_commit()
-  [ ] Add deduplication: skip pairs already in the DB
-  [ ] Write tests in tests/test_linker.py
 """
 
 from __future__ import annotations
 
+import logging
+from os.path import basename
+
 from gitmind.models import Commit, CommitSessionPair, Session, SessionChunk
 from gitmind.config import settings
+from gitmind.parsers.session_parser import chunk_session
+
+logger = logging.getLogger(__name__)
 
 # Pairs below this score are discarded (too noisy)
 MIN_PAIR_SCORE = 0.5
@@ -56,10 +54,24 @@ def link_all(
 
     Returns:
         List of CommitSessionPair objects, sorted by commit timestamp desc.
-
-    TODO (Week 1): implement this (thin wrapper over link_commit).
     """
-    raise NotImplementedError
+    pairs: list[CommitSessionPair] = []
+
+    for commit in commits:
+        commit_pairs = link_commit(commit, sessions)
+        pairs.extend(commit_pairs)
+
+    # Sort by commit timestamp, newest first
+    pairs.sort(key=lambda p: p.commit.timestamp, reverse=True)
+
+    logger.info(
+        "Linked %d commit-session pairs from %d commits and %d sessions",
+        len(pairs),
+        len(commits),
+        len(sessions),
+    )
+
+    return pairs
 
 
 def link_commit(
@@ -82,20 +94,62 @@ def link_commit(
 
     Returns:
         List of CommitSessionPair objects (may be empty if no match found).
-
-    TODO (Week 1): implement this.
     """
-    raise NotImplementedError
+    pairs: list[CommitSessionPair] = []
+
+    for session in sessions:
+        # Step 1: check time window
+        if not _is_in_time_window(commit, session):
+            continue
+
+        # Step 2 + 3: compute relevance (returns 0 if no file overlap)
+        score = _compute_relevance_score(commit, session)
+
+        # Step 4: filter by minimum score
+        if score < MIN_PAIR_SCORE:
+            continue
+
+        # Step 5: extract relevant chunks
+        # Ensure the session has chunks — generate them if needed
+        if not session.chunks:
+            session.chunks = chunk_session(session)
+
+        relevant_chunks = _extract_relevant_chunks(session, commit)
+
+        # If no specific chunks match files, include all chunks
+        # (the session itself was linked by time + file overlap at session level)
+        if not relevant_chunks and session.chunks:
+            relevant_chunks = session.chunks
+
+        pair = CommitSessionPair(
+            pair_id=f"{commit.hash}::{session.session_id}",
+            commit=commit,
+            session_id=session.session_id,
+            relevance_score=score,
+            session_chunks=relevant_chunks,
+        )
+        pairs.append(pair)
+
+        logger.debug(
+            "Linked commit %s to session %s (score=%.2f, %d chunks)",
+            commit.short_hash,
+            session.session_id,
+            score,
+            len(relevant_chunks),
+        )
+
+    return pairs
 
 
 def _is_in_time_window(commit: Commit, session: Session) -> bool:
     """
     Return True if the session's end time is within
     settings.link_time_window_seconds of the commit timestamp.
-
-    TODO (Week 1): implement this.
     """
-    raise NotImplementedError
+    time_delta = abs(
+        (commit.timestamp - session.end_time).total_seconds()
+    )
+    return time_delta <= settings.link_time_window_seconds
 
 
 def _compute_relevance_score(
@@ -113,9 +167,45 @@ def _compute_relevance_score(
         time_penalty = 0.1 if time_delta > 3600 else 0.0
         score = clamp(base + file_bonus - time_penalty, 0.0, 1.0)
 
-    TODO (Week 1): implement this.
+    Returns 0.0 if there is no file overlap at all.
     """
-    raise NotImplementedError
+    # Compute file overlap — normalize paths for comparison
+    commit_files = set(_normalize_path(f) for f in commit.files_changed)
+    session_files = set(_normalize_path(f) for f in session.files_mentioned)
+
+    overlapping = commit_files & session_files
+    if not overlapping:
+        return 0.0
+
+    # Base score for any overlap
+    base = 0.5
+
+    # Bonus for additional overlapping files
+    file_bonus = min(0.4, 0.1 * len(overlapping))
+
+    # Time penalty
+    time_delta = abs((commit.timestamp - session.end_time).total_seconds())
+    time_penalty = 0.1 if time_delta > 3600 else 0.0
+
+    # Clamp to [0.0, 1.0]
+    score = max(0.0, min(1.0, base + file_bonus - time_penalty))
+    return score
+
+
+def _normalize_path(path: str) -> str:
+    """Normalize a file path for comparison (strip ./ prefix, etc.)."""
+    path = path.strip()
+    if path.startswith("./"):
+        path = path[2:]
+    if path.startswith("/"):
+        # Use just the relative portion — take basename as fallback
+        parts = path.split("/")
+        # Try to find a reasonable relative path
+        for i, part in enumerate(parts):
+            if part in ("src", "lib", "app", "tests", "test", "pkg", "internal"):
+                return "/".join(parts[i:])
+        return basename(path)
+    return path
 
 
 def _extract_relevant_chunks(
@@ -128,7 +218,13 @@ def _extract_relevant_chunks(
 
     We don't want to store the entire session — just the parts that
     are directly relevant to this commit's changes.
-
-    TODO (Week 1): implement this.
     """
-    raise NotImplementedError
+    commit_files = set(_normalize_path(f) for f in commit.files_changed)
+
+    relevant: list[SessionChunk] = []
+    for chunk in session.chunks:
+        chunk_files = set(_normalize_path(f) for f in chunk.files_mentioned)
+        if chunk_files & commit_files:
+            relevant.append(chunk)
+
+    return relevant
