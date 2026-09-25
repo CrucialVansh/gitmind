@@ -6,10 +6,9 @@ Integration tests using a temporary database.
 Run with:  pytest tests/test_db.py -v
 """
 
-import pytest
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
-import tempfile
+
+import pytest
 
 from gitmind.db import GitMindDB
 from gitmind.models import (

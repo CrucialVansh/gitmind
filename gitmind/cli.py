@@ -4,7 +4,7 @@ GitMind CLI — the user-facing entry point.
 Commands:
   gitmind index          Index (or re-index) the current git repository
   gitmind ask  <query>   Ask a question about a codebase decision
-  gitmind search <term>  Search for sessions mentioning a topic
+  gitmind search <term>  Search for sessions or code mentioning a topic
   gitmind import         Import session transcripts from Claude/manual sources
   gitmind status         Show index health (row counts, last indexed, etc.)
 
@@ -12,29 +12,30 @@ Built with Click + Rich for a polished terminal experience.
 """
 
 import asyncio
-import json
-import sys
+import logging
+from pathlib import Path
 
 import click
-from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 from rich.text import Text
-from rich.progress import Progress, SpinnerColumn, TextColumn
 
 console = Console()
 
 
 @click.group()
 @click.version_option(package_name="gitmind")
-def cli():
+@click.option("--verbose", "-v", is_flag=True, default=False, help="Enable debug logging.")
+def cli(verbose: bool):
     """
     🧠 GitMind — Git-bound coding agent memory.
 
     Makes your team's AI session reasoning permanent and searchable.
     """
-    pass
+    level = logging.DEBUG if verbose else logging.WARNING
+    logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
 
 
 # ── gitmind index ──────────────────────────────────────────────────────────────
@@ -57,22 +58,30 @@ def cli():
     show_default=True,
     help="Which session sources to index.",
 )
-def index(repo_path: Path, since: str | None, session_source: str):
+@click.option(
+    "--rebuild",
+    is_flag=True,
+    default=False,
+    help="Clear existing index before indexing.",
+)
+def index(repo_path: Path, since: str | None, session_source: str, rebuild: bool):
     """
     Index the git repository and AI sessions at REPO_PATH.
 
     This command:
-      1. Parses git commit history
-      2. Discovers and parses AI session transcripts
+      1. Parses git commit history and extracts functions touched via AST
+      2. Discovers and parses AI session transcripts (Cursor, Claude, manual)
       3. Links commits to sessions (the zero-label trick)
-      4. Stores everything in ~/.gitmind/store.db
+      4. Builds BM25 code structural index
+      5. Stores everything in ~/.gitmind/store.db
 
     Run this once, then again whenever you have new commits or sessions.
     """
     from gitmind.db import GitMindDB
-    from gitmind.parsers.git_parser import parse_commits
-    from gitmind.parsers.session_parser import parse_cursor_sessions, chunk_session
     from gitmind.linker import link_all
+    from gitmind.parsers.git_parser import parse_commits
+    from gitmind.parsers.session_parser import chunk_session, parse_cursor_sessions
+    from gitmind.retrieval.structural import StructuralIndex
 
     console.print(Panel(
         Text("🔍 Indexing repository...", style="bold cyan"),
@@ -81,6 +90,10 @@ def index(repo_path: Path, since: str | None, session_source: str):
 
     db = GitMindDB()
     db.create_tables()
+
+    if rebuild:
+        db.clear_all()
+        console.print("  [yellow]Cleared existing index database[/yellow]")
 
     # Step 1: Parse git commits
     commits = []
@@ -147,6 +160,44 @@ def index(repo_path: Path, since: str | None, session_source: str):
     else:
         console.print("  [dim]⚠ No links created (need both commits and sessions)[/dim]")
 
+    # Step 4: Build Structural BM25 index
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Building code structure index...", total=None)
+        try:
+            struct_idx = StructuralIndex()
+            struct_idx.build(repo_path)
+            struct_idx.save()
+            progress.update(task, description="✅ Built code structure index")
+        except Exception as e:
+            progress.update(task, description=f"⚠ Code structure index: {e}")
+
+    # Step 5: Build Episode vector store (FAISS)
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Building episode vector store...", total=None)
+        try:
+            chunks = db.get_all_chunks()
+            if chunks:
+                from gitmind.retrieval.episodes import EpisodeStore
+                ep_store = EpisodeStore()
+                ep_store.build(chunks)
+                ep_store.save()
+                progress.update(
+                    task,
+                    description=f"✅ Built episode vector store ({len(chunks)} chunks)",
+                )
+            else:
+                progress.update(task, description="⚠ No chunks to index in vector store")
+        except Exception as e:
+            progress.update(task, description=f"⚠ Episode store: {e}")
+
     # Summary
     stats = db.stats()
     console.print()
@@ -186,8 +237,9 @@ def ask(query: str, repo: Path, output_json: bool):
     """
     from gitmind.answer import answer as answer_fn
 
-    console.print(f"[bold]Query:[/bold] {query}")
-    console.print("[dim]Routing query...[/dim]")
+    if not output_json:
+        console.print(f"[bold]Query:[/bold] {query}")
+        console.print("[dim]Routing query...[/dim]")
 
     result = asyncio.run(answer_fn(query, str(repo.resolve())))
 
@@ -243,20 +295,49 @@ def ask(query: str, repo: Path, output_json: bool):
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     help="Path to the repository. Defaults to current directory.",
 )
-def search(term: str, top: int, repo: Path):
+@click.option(
+    "--text",
+    "text_only",
+    is_flag=True,
+    default=False,
+    help="Fast direct plaintext search across database chunks.",
+)
+def search(term: str, top: int, repo: Path, text_only: bool):
     """
-    Search for session chunks mentioning a topic or keyword.
+    Search for session chunks or code elements mentioning a topic or keyword.
 
     Example:
       gitmind search "rate limiting"
-      gitmind search "retry logic"
+      gitmind search "retry logic" --text
     """
-    from gitmind.retrieval.structural import StructuralIndex
+    from gitmind.db import GitMindDB
     from gitmind.retrieval.episodes import EpisodeStore
+    from gitmind.retrieval.structural import StructuralIndex
 
     console.print(f"[bold]Searching for:[/bold] {term}")
 
     results_found = False
+
+    if text_only:
+        db = GitMindDB()
+        chunks = db.search_chunks_text(term, limit=top)
+        if chunks:
+            results_found = True
+            console.print()
+            table = Table(title="Text Search Results (Database Chunks)")
+            table.add_column("Session", style="cyan")
+            table.add_column("Turn", style="dim", justify="right")
+            table.add_column("Text", style="white", max_width=70)
+
+            for c in chunks:
+                preview = c.text.replace("\n", " ")
+                if len(preview) > 70:
+                    preview = preview[:67] + "..."
+                table.add_row(c.session_id, str(c.turn_index), preview)
+            console.print(table)
+        else:
+            console.print(f"[yellow]No chunks found containing '{term}'[/yellow]")
+        return
 
     # Search structural index
     struct_index = StructuralIndex()
@@ -298,10 +379,13 @@ def search(term: str, top: int, repo: Path):
                 table.add_column("Text", style="white", max_width=60)
 
                 for r in gated_results:
+                    preview = r.chunk.text.replace("\n", " ")
+                    if len(preview) > 60:
+                        preview = preview[:57] + "..."
                     table.add_row(
                         r.chunk.session_id,
                         f"{r.score:.2f}",
-                        r.chunk.text[:60] + "..." if len(r.chunk.text) > 60 else r.chunk.text,
+                        preview,
                     )
                 console.print(table)
     except Exception as e:
@@ -316,7 +400,6 @@ def search(term: str, top: int, repo: Path):
 @cli.group()
 def import_():
     """Import session transcripts from external sources."""
-    pass
 
 
 @import_.command(name="claude")
@@ -328,7 +411,7 @@ def import_claude(json_path: Path):
     To export: Claude.ai → Project → ··· → Export conversations → JSON
     """
     from gitmind.db import GitMindDB
-    from gitmind.parsers.session_parser import parse_claude_export, chunk_session
+    from gitmind.parsers.session_parser import chunk_session, parse_claude_export
 
     console.print(f"[bold]Importing Claude export:[/bold] {json_path}")
 
@@ -349,7 +432,7 @@ def import_claude(json_path: Path):
 def import_transcript(file_path: Path):
     """Import a manually exported transcript (plain text or markdown)."""
     from gitmind.db import GitMindDB
-    from gitmind.parsers.session_parser import parse_manual_transcript, chunk_session
+    from gitmind.parsers.session_parser import chunk_session, parse_manual_transcript
 
     console.print(f"[bold]Importing transcript:[/bold] {file_path}")
 
@@ -378,6 +461,7 @@ def status():
       - Number of indexed commits
       - Number of indexed sessions and chunks
       - Number of commit-session pairs
+      - Last index time
       - Data directory location
     """
     from gitmind.config import settings
@@ -396,6 +480,7 @@ def status():
         return
 
     stats = db.stats()
+    last_indexed = db.get_last_indexed_time()
 
     table = Table(title="GitMind Index Health")
     table.add_column("Metric", style="cyan")
@@ -405,6 +490,9 @@ def status():
     table.add_row("💬 Sessions", str(stats["sessions"]))
     table.add_row("📄 Chunks", str(stats["chunks"]))
     table.add_row("🔗 Commit-Session Links", str(stats["pairs"]))
+
+    if last_indexed:
+        table.add_row("🕒 Latest Indexed Record", last_indexed.strftime("%Y-%m-%d %H:%M:%S UTC"))
 
     console.print(table)
 

@@ -72,14 +72,12 @@ def _get_cursor_storage_root() -> Path:
     system = platform.system()
     if system == "Darwin":
         return Path.home() / "Library" / "Application Support" / "Cursor" / "User"
-    elif system == "Linux":
+    if system == "Linux":
         return Path.home() / ".config" / "Cursor" / "User"
-    elif system == "Windows":
+    if system == "Windows":
         appdata = Path.home() / "AppData" / "Roaming"
         return appdata / "Cursor" / "User"
-    else:
-        # Fallback
-        return Path.home() / ".cursor" / "User"
+    return Path.home() / ".cursor" / "User"
 
 
 def _find_cursor_db_files(storage_root: Path) -> list[Path]:
@@ -157,7 +155,8 @@ def _parse_cursor_db(db_path: Path) -> Iterator[Session]:
 
         # Detect which table format we're dealing with
         cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('cursorDiskKV', 'ItemTable')"
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name IN ('cursorDiskKV', 'ItemTable')"
         )
         tables = [row[0] for row in cursor.fetchall()]
 
@@ -199,7 +198,7 @@ def _parse_cursor_disk_kv(conn: sqlite3.Connection, db_path: Path) -> Iterator[S
             bubble_rows = cursor.fetchall()
 
             messages: list[dict] = []
-            for bkey, bvalue in bubble_rows:
+            for _bkey, bvalue in bubble_rows:
                 try:
                     bdata = json.loads(bvalue) if isinstance(bvalue, str) else json.loads(
                         bvalue.decode("utf-8") if isinstance(bvalue, bytes) else str(bvalue)
@@ -247,7 +246,7 @@ def _parse_cursor_item_table(conn: sqlite3.Connection, db_path: Path) -> Iterato
 
 def _build_session_from_cursor_messages(
     composer_id: str,
-    metadata: dict,
+    _metadata: dict,
     messages: list[dict],
     db_path: Path,
 ) -> Session | None:
@@ -357,7 +356,10 @@ def _parse_cursor_row(row: dict) -> Session | None:
     # Generate a stable session ID from the key
     session_id = f"cursor-{hashlib.sha256(key.encode()).hexdigest()[:12]}"
 
-    mtime = db_path.stat().st_mtime if isinstance(db_path, Path) and db_path.exists() else datetime.now(tz=timezone.utc).timestamp()
+    if isinstance(db_path, Path) and db_path.exists():
+        mtime = db_path.stat().st_mtime
+    else:
+        mtime = datetime.now(tz=timezone.utc).timestamp()
 
     return Session(
         session_id=session_id,
@@ -415,7 +417,10 @@ def parse_claude_export(json_path: Path) -> Iterator[Session]:
 
 def _build_session_from_claude_conv(conv: dict) -> Session | None:
     """Build a Session from a single Claude conversation object."""
-    session_id = f"claude-{conv.get('uuid', conv.get('id', hashlib.sha256(json.dumps(conv, default=str).encode()).hexdigest()[:12]))}"
+    conv_uuid = conv.get("uuid") or conv.get("id")
+    if not conv_uuid:
+        conv_uuid = hashlib.sha256(json.dumps(conv, default=str).encode()).hexdigest()[:12]
+    session_id = f"claude-{conv_uuid}"
 
     # Extract messages
     messages = conv.get("chat_messages", conv.get("messages", []))
@@ -456,7 +461,9 @@ def _build_session_from_claude_conv(conv: dict) -> Session | None:
     created_at = conv.get("created_at", conv.get("create_time"))
     updated_at = conv.get("updated_at", conv.get("update_time"))
 
-    start_time = _parse_timestamp(created_at) if created_at else datetime.now(tz=timezone.utc)
+    start_time = (
+        _parse_timestamp(created_at) if created_at else datetime.now(tz=timezone.utc)
+    )
     end_time = _parse_timestamp(updated_at) if updated_at else start_time
 
     return Session(
@@ -476,7 +483,7 @@ def _parse_timestamp(ts) -> datetime:
         if ts > 1e12:
             ts = ts / 1000
         return datetime.fromtimestamp(ts, tz=timezone.utc)
-    elif isinstance(ts, str):
+    if isinstance(ts, str):
         # ISO 8601 format
         try:
             return datetime.fromisoformat(ts.replace("Z", "+00:00"))

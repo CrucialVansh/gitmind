@@ -8,9 +8,21 @@ version = "0.1.0"
 description = "Git-bound coding agent memory — makes your team's AI session reasoning permanent and searchable."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
-authors = [{ name = "Your Name", email = "you@example.com" }]
-keywords = ["ai", "developer-tools", "git", "llm", "memory", "rag"]
+license = "MIT"
+authors = [{ name = "Vansh Pruthi", email = "vanshpruthi@users.noreply.github.com" }]
+keywords = ["ai", "developer-tools", "git", "llm", "memory", "rag", "code-search"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Version Control :: Git",
+]
 
 dependencies = [
     # CLI
@@ -47,8 +59,15 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
+    "pylint>=3.0",
     "mypy>=1.10",
+    "build>=1.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/CrucialVansh/gitmind"
+Repository = "https://github.com/CrucialVansh/gitmind.git"
+Issues = "https://github.com/CrucialVansh/gitmind/issues"
 
 [project.scripts]
 gitmind = "gitmind.cli:cli"
@@ -60,6 +79,27 @@ include = ["gitmind*"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.pylint.main]
+py-version = "3.12"
+ignore-paths = ["vscode-gitmind", "^\\.venv/"]
+
+[tool.pylint.messages_control]
+disable = [
+    "too-few-public-methods",
+    "import-outside-toplevel",
+    "broad-exception-caught",
+    "redefined-outer-name",
+    "missing-function-docstring",
+    "too-many-locals",
+    "too-many-branches",
+    "too-many-statements",
+    "protected-access",
+    "no-value-for-parameter",
+]
+
+[tool.pylint.format]
+max-line-length = 100
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -11,8 +11,6 @@ Only inject chunks above settings.episode_gate_threshold.
 from __future__ import annotations
 
 import logging
-import struct
-from pathlib import Path
 
 import numpy as np
 

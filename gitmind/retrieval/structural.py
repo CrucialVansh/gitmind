@@ -4,16 +4,19 @@ Structural Index — Week 2.
 BM25 index over the codebase AST: files → functions → callsites → imports.
 Answers "where" queries like "where does the retry logic live?"
 
-Uses tree-sitter to extract function/class definitions and rank-bm25 for retrieval.
+Uses tree-sitter (via ast_extractor) to extract function/class definitions
+and rank-bm25 (BM25Plus) for retrieval.
 """
 
 from __future__ import annotations
 
 import logging
 import pickle
+import re
 from pathlib import Path
 
 from gitmind.config import settings
+from gitmind.parsers.ast_extractor import extract_symbols
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +31,7 @@ class StructuralIndex:
     """BM25 index over the codebase structure."""
 
     def __init__(self):
-        self._documents: list[dict] = []  # [{path, name, type, text}]
+        self._documents: list[dict] = []  # [{path, name, type, text, start_line, end_line}]
         self._corpus: list[list[str]] = []
         self._bm25 = None
 
@@ -37,7 +40,6 @@ class StructuralIndex:
         Walk the repo and index all code files.
 
         Extracts function names, class names, and docstrings from source files.
-        Falls back to line-based indexing if tree-sitter isn't available.
         """
         self._documents = []
         self._corpus = []
@@ -52,8 +54,12 @@ class StructuralIndex:
 
                 for elem in elements:
                     self._documents.append(elem)
-                    # Tokenize for BM25
-                    tokens = _tokenize(f"{elem['name']} {elem['text']} {elem['path']}")
+                    # Tokenize for BM25: index symbol name, full signature, docstring, and path
+                    text_blob = (
+                        f"{elem['name']} {elem.get('signature', '')} "
+                        f"{elem.get('docstring', '')} {elem['text']} {elem['path']}"
+                    )
+                    tokens = _tokenize(text_blob)
                     self._corpus.append(tokens)
 
             except Exception as e:
@@ -61,8 +67,8 @@ class StructuralIndex:
                 continue
 
         if self._corpus:
-            from rank_bm25 import BM25Okapi
-            self._bm25 = BM25Okapi(self._corpus)
+            from rank_bm25 import BM25Plus
+            self._bm25 = BM25Plus(self._corpus)
             logger.info("Built structural index with %d entries", len(self._documents))
         else:
             logger.warning("No code files found to index")
@@ -77,6 +83,9 @@ class StructuralIndex:
             return []
 
         tokens = _tokenize(query)
+        if not tokens:
+            return []
+
         scores = self._bm25.get_scores(tokens)
 
         # Pair documents with scores and sort by score DESC
@@ -114,22 +123,23 @@ class StructuralIndex:
         self._corpus = data["corpus"]
 
         if self._corpus:
-            from rank_bm25 import BM25Okapi
-            self._bm25 = BM25Okapi(self._corpus)
+            from rank_bm25 import BM25Plus
+            self._bm25 = BM25Plus(self._corpus)
             logger.info("Loaded structural index with %d entries", len(self._documents))
 
 
 def _walk_code_files(repo_path: Path) -> list[Path]:
     """Walk the repo and return all indexable code files."""
+    ignored_dirs = {
+        "node_modules", "__pycache__", "venv", ".venv",
+        "dist", "build", "vscode-gitmind"
+    }
     files = []
     for f in repo_path.rglob("*"):
         if f.is_file() and f.suffix in _INDEXABLE_EXTENSIONS:
             # Skip hidden dirs, node_modules, venvs, etc.
             parts = f.relative_to(repo_path).parts
-            skip = any(
-                p.startswith(".") or p in ("node_modules", "__pycache__", "venv", ".venv", "dist", "build")
-                for p in parts
-            )
+            skip = any(p.startswith(".") or p in ignored_dirs for p in parts)
             if not skip:
                 files.append(f)
     return files
@@ -137,134 +147,54 @@ def _walk_code_files(repo_path: Path) -> list[Path]:
 
 def _extract_structural_elements(content: str, rel_path: str, suffix: str) -> list[dict]:
     """
-    Extract structural elements (functions, classes) from source code.
-
-    Uses regex-based extraction as a portable fallback.
+    Extract structural elements (files, functions, classes) from source code
+    using Tree-sitter symbol extraction.
     """
-    elements = []
+    elements: list[dict] = []
 
-    # Always add the file itself as an element
-    first_lines = "\n".join(content.split("\n")[:10])
+    # File overview document
+    first_lines = "\n".join(content.splitlines()[:15])
     elements.append({
         "path": rel_path,
         "name": rel_path,
         "type": "file",
         "text": first_lines,
+        "start_line": 1,
+        "end_line": len(content.splitlines()),
     })
 
-    if suffix == ".py":
-        elements.extend(_extract_python_elements(content, rel_path))
-    elif suffix in (".ts", ".tsx", ".js", ".jsx"):
-        elements.extend(_extract_js_ts_elements(content, rel_path))
-    elif suffix == ".go":
-        elements.extend(_extract_go_elements(content, rel_path))
+    # AST symbol extraction
+    symbols = extract_symbols(content, suffix)
+    lines = content.splitlines()
 
-    return elements
+    for sym in symbols:
+        # Extract snippet preview
+        start_idx = max(0, sym.start_line - 1)
+        end_idx = min(len(lines), sym.end_line)
+        preview_lines = lines[start_idx:min(start_idx + 10, end_idx)]
+        preview = "\n".join(preview_lines)
 
-
-def _extract_python_elements(content: str, rel_path: str) -> list[dict]:
-    """Extract Python functions and classes using regex."""
-    import re
-    elements = []
-
-    # Functions
-    for match in re.finditer(
-        r'^([ \t]*)(?:async\s+)?def\s+(\w+)\s*\(([^)]*)\).*?:[ \t]*\n([ \t]*(?:"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'))?',
-        content,
-        re.MULTILINE,
-    ):
-        indent, name, params, docstring = match.groups()
-        text = f"def {name}({params})"
-        if docstring:
-            text += f"\n{docstring.strip()}"
         elements.append({
             "path": rel_path,
-            "name": name,
-            "type": "function",
-            "text": text,
-        })
-
-    # Classes
-    for match in re.finditer(
-        r'^class\s+(\w+)(?:\([^)]*\))?.*?:[ \t]*\n([ \t]*(?:"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'))?',
-        content,
-        re.MULTILINE,
-    ):
-        name, docstring = match.groups()
-        text = f"class {name}"
-        if docstring:
-            text += f"\n{docstring.strip()}"
-        elements.append({
-            "path": rel_path,
-            "name": name,
-            "type": "class",
-            "text": text,
-        })
-
-    return elements
-
-
-def _extract_js_ts_elements(content: str, rel_path: str) -> list[dict]:
-    """Extract JavaScript/TypeScript functions using regex."""
-    import re
-    elements = []
-
-    # Named functions and arrow functions
-    patterns = [
-        r'(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)',
-        r'(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>',
-        r'(?:export\s+)?class\s+(\w+)',
-    ]
-
-    for pattern in patterns:
-        for match in re.finditer(pattern, content, re.MULTILINE):
-            name = match.group(1)
-            # Get context (surrounding lines)
-            start = max(0, content[:match.start()].rfind("\n"))
-            end = content.find("\n", match.end())
-            context = content[start:end].strip() if end > 0 else content[start:].strip()
-
-            elements.append({
-                "path": rel_path,
-                "name": name,
-                "type": "function" if "class" not in pattern else "class",
-                "text": context,
-            })
-
-    return elements
-
-
-def _extract_go_elements(content: str, rel_path: str) -> list[dict]:
-    """Extract Go functions and types using regex."""
-    import re
-    elements = []
-
-    for match in re.finditer(r'func\s+(?:\([^)]+\)\s+)?(\w+)\s*\(([^)]*)\)', content):
-        name = match.group(1)
-        params = match.group(2)
-        elements.append({
-            "path": rel_path,
-            "name": name,
-            "type": "function",
-            "text": f"func {name}({params})",
-        })
-
-    for match in re.finditer(r'type\s+(\w+)\s+struct', content):
-        name = match.group(1)
-        elements.append({
-            "path": rel_path,
-            "name": name,
-            "type": "struct",
-            "text": f"type {name} struct",
+            "name": sym.name,
+            "type": sym.symbol_type,
+            "text": preview,
+            "signature": sym.signature or "",
+            "docstring": sym.docstring or "",
+            "start_line": sym.start_line,
+            "end_line": sym.end_line,
         })
 
     return elements
 
 
 def _tokenize(text: str) -> list[str]:
-    """Simple whitespace + punctuation tokenizer for BM25."""
-    import re
-    # Split on non-alphanumeric, lowercase
-    tokens = re.findall(r'\w+', text.lower())
-    # Filter very short tokens
-    return [t for t in tokens if len(t) > 1]
+    """
+    Tokenize text into keywords for BM25 with camelCase and snake_case splitting.
+    """
+    s = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
+    s = s.replace("_", " ").replace("-", " ")
+    tokens = re.findall(r"\w+", s.lower())
+    orig_words = [w.lower() for w in re.findall(r"\w+", text) if len(w) > 1]
+    combined = [t for t in tokens if len(t) > 1] + orig_words
+    return list(dict.fromkeys(combined))

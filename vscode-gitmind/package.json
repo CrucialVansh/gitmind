@@ -1,0 +1,107 @@
+{
+  "name": "gitmind",
+  "displayName": "GitMind",
+  "description": "Git-bound coding agent memory — permanent and searchable AI reasoning right inside your editor.",
+  "version": "0.1.0",
+  "publisher": "gitmind",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "git",
+    "ai",
+    "memory",
+    "cursor",
+    "claude",
+    "decision-tracking"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:python",
+    "onLanguage:typescript",
+    "onLanguage:javascript",
+    "onLanguage:typescriptreact",
+    "onLanguage:javascriptreact"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "gitmind-sidebar-view",
+          "title": "GitMind",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "gitmind-sidebar-view": [
+        {
+          "type": "webview",
+          "id": "gitmind.sidebarView",
+          "name": "GitMind Memory"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "gitmind.ask",
+        "title": "GitMind: Ask a Decision Question",
+        "category": "GitMind"
+      },
+      {
+        "command": "gitmind.index",
+        "title": "GitMind: Index Repository",
+        "category": "GitMind"
+      },
+      {
+        "command": "gitmind.showFunctionRationale",
+        "title": "GitMind: Show Rationale for Function",
+        "category": "GitMind"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "gitmind.showFunctionRationale",
+          "group": "7_modification",
+          "when": "editorHasSelection"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "GitMind",
+      "properties": {
+        "gitmind.executablePath": {
+          "type": "string",
+          "default": "gitmind",
+          "description": "Path to the gitmind CLI executable"
+        },
+        "gitmind.enableCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show GitMind rationale CodeLens annotations above functions"
+        },
+        "gitmind.enableHover": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show rationale summary when hovering over function names"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "build": "tsc -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}

@@ -117,7 +117,8 @@ class GitMindDB:
             cur = conn.cursor()
             cur.execute(
                 "INSERT OR IGNORE INTO commits "
-                "(hash, short_hash, message, author, timestamp, diff, files_changed, functions_touched) "
+                "(hash, short_hash, message, author, timestamp, diff, "
+                "files_changed, functions_touched) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     commit.hash,
@@ -132,11 +133,11 @@ class GitMindDB:
             )
             conn.commit()
 
-    def get_commit(self, hash: str) -> Commit | None:
+    def get_commit(self, commit_hash: str) -> Commit | None:
         """Fetch a commit by its full hash."""
         with self._connect() as conn:
             cur = conn.cursor()
-            cur.execute("SELECT * FROM commits WHERE hash = ?", (hash,))
+            cur.execute("SELECT * FROM commits WHERE hash = ?", (commit_hash,))
             row = cur.fetchone()
             if row is None:
                 return None
@@ -169,6 +170,12 @@ class GitMindDB:
         with self._connect() as conn:
             cur = conn.cursor()
 
+            source_val = (
+                session.source.value
+                if hasattr(session.source, "value")
+                else str(session.source)
+            )
+
             # Insert the session itself
             cur.execute(
                 "INSERT OR IGNORE INTO sessions "
@@ -176,7 +183,7 @@ class GitMindDB:
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     session.session_id,
-                    session.source.value if hasattr(session.source, 'value') else str(session.source),
+                    source_val,
                     int(session.start_time.timestamp()),
                     int(session.end_time.timestamp()),
                     session.raw_transcript,
@@ -311,6 +318,39 @@ class GitMindDB:
                 (f"%{function_name}%",),
             )
             return [dict(row) for row in cur.fetchall()]
+
+    def search_chunks_text(self, term: str, limit: int = 10) -> list[SessionChunk]:
+        """Search session chunks by substring match."""
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT * FROM session_chunks WHERE text LIKE ? ORDER BY rowid DESC LIMIT ?",
+                (f"%{term}%", limit),
+            )
+            return [_row_to_chunk(row) for row in cur.fetchall()]
+
+    def get_last_indexed_time(self) -> datetime | None:
+        """Return the most recent commit or session timestamp indexed."""
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT MAX(timestamp) FROM commits")
+            commit_ts = cur.fetchone()[0]
+            cur.execute("SELECT MAX(end_time) FROM sessions")
+            session_ts = cur.fetchone()[0]
+
+            latest = max(filter(None, [commit_ts, session_ts]), default=None)
+            if latest:
+                return datetime.fromtimestamp(latest, tz=timezone.utc)
+            return None
+
+    def clear_all(self) -> None:
+        """Wipe all data from tables (for index rebuilding)."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM commit_session_pairs")
+            conn.execute("DELETE FROM session_chunks")
+            conn.execute("DELETE FROM sessions")
+            conn.execute("DELETE FROM commits")
+            conn.commit()
 
     # ── Stats ──────────────────────────────────────────────────────────────────
 

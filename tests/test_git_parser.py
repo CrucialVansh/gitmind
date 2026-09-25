@@ -4,10 +4,11 @@ Tests for gitmind/parsers/git_parser.py
 Run with:  pytest tests/test_git_parser.py -v
 """
 
-import pytest
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
 
 from gitmind.parsers.git_parser import parse_commits, _extract_files_changed, _build_commit
 

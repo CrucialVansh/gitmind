@@ -65,7 +65,7 @@ class Settings(BaseSettings):
 
     def ensure_data_dir(self) -> None:
         """Create the data directory if it doesn't exist."""
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        Path(self.data_dir).mkdir(parents=True, exist_ok=True)
 
 
 # Singleton — import this everywhere

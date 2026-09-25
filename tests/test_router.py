@@ -4,7 +4,6 @@ Tests for gitmind/router.py
 Run with:  pytest tests/test_router.py -v
 """
 
-import pytest
 from gitmind.router import route
 from gitmind.models import QueryIntent
 

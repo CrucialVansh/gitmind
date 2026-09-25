@@ -9,7 +9,6 @@ Pipeline: route query → retrieve context → generate answer
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from pathlib import Path
@@ -20,7 +19,6 @@ from gitmind.models import (
     DecisionArcEntry,
     QueryIntent,
     QueryResult,
-    RetrievedChunk,
 )
 from gitmind.retrieval.episodes import EpisodeStore
 from gitmind.retrieval.structural import StructuralIndex
@@ -194,7 +192,10 @@ async def _generate_answer(
                 {"role": "system", "content": system_prompt},
                 {
                     "role": "user",
-                    "content": f"Question: {query}\n\nContext from git history and AI sessions:\n\n{context_text}",
+                    "content": (
+                        f"Question: {query}\n\n"
+                        f"Context from git history and AI sessions:\n\n{context_text}"
+                    ),
                 },
             ],
             temperature=0.3,
@@ -230,19 +231,18 @@ def _build_system_prompt(intent: QueryIntent) -> str:
             "Focus on the reasoning, alternatives considered, and the decision timeline. "
             "Present the answer chronologically if multiple decisions were made over time."
         )
-    elif intent == QueryIntent.STRUCTURAL:
+    if intent == QueryIntent.STRUCTURAL:
         return (
             f"{base}\n\n"
             "The user is asking WHERE something is in the codebase. "
             "Focus on file paths, function names, and code structure. "
             "Be specific about locations."
         )
-    else:
-        return (
-            f"{base}\n\n"
-            "The user is asking about a topic or event in the codebase history. "
-            "Summarize the relevant information from the sessions and commits."
-        )
+    return (
+        f"{base}\n\n"
+        "The user is asking about a topic or event in the codebase history. "
+        "Summarize the relevant information from the sessions and commits."
+    )
 
 
 def _extract_function_name(query: str) -> str:
@@ -264,6 +264,9 @@ def _extract_function_name(query: str) -> str:
         return code_words[0]
 
     # Last resort: use a keyword from the query
-    stop_words = {"why", "did", "we", "do", "does", "the", "is", "was", "how", "what", "a", "an", "to"}
+    stop_words = {
+        "why", "did", "we", "do", "does", "the", "is", "was",
+        "how", "what", "a", "an", "to"
+    }
     meaningful = [w for w in words if w.lower() not in stop_words]
     return meaningful[0] if meaningful else query

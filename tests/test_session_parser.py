@@ -4,17 +4,18 @@ Tests for gitmind/parsers/session_parser.py
 Run with:  pytest tests/test_session_parser.py -v
 """
 
-import pytest
-from pathlib import Path
-
-from gitmind.parsers.session_parser import (
-    extract_files_mentioned,
-    chunk_session,
-    parse_manual_transcript,
-    parse_claude_export,
-)
-from gitmind.models import Session, SessionSource
 from datetime import datetime, timezone
+import json
+
+import pytest
+
+from gitmind.models import Session, SessionSource
+from gitmind.parsers.session_parser import (
+    chunk_session,
+    extract_files_mentioned,
+    parse_claude_export,
+    parse_manual_transcript,
+)
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -154,7 +155,6 @@ def test_parse_claude_export_basic(tmp_path):
         }
     ]
     json_path = tmp_path / "conversations.json"
-    import json
     json_path.write_text(json.dumps(export_data))
 
     sessions = list(parse_claude_export(json_path))

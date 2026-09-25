@@ -4,18 +4,18 @@ Tests for gitmind/linker.py
 Run with:  pytest tests/test_linker.py -v
 """
 
-import pytest
 from datetime import datetime, timezone, timedelta
+
+import pytest
 
 from gitmind.linker import (
     link_commit,
     link_all,
     _is_in_time_window,
     _compute_relevance_score,
-    _extract_relevant_chunks,
     MIN_PAIR_SCORE,
 )
-from gitmind.models import Commit, Session, SessionChunk, SessionSource
+from gitmind.models import Commit, Session, SessionSource
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -40,12 +40,16 @@ def sample_commit() -> Commit:
 @pytest.fixture
 def matching_session() -> Session:
     """A session that temporally and file-wise overlaps with the commit."""
+    transcript = (
+        "Human: We discussed src/api.py retry logic. The vendor said...\n\n"
+        "Assistant: Yes, we should only retry on 503."
+    )
     return Session(
         session_id="session-match",
         source=SessionSource.CURSOR,
         start_time=BASE_TIME - timedelta(hours=1),
         end_time=BASE_TIME - timedelta(minutes=10),  # ended 10min before commit
-        raw_transcript="Human: We discussed src/api.py retry logic. The vendor said...\n\nAssistant: Yes, we should only retry on 503.",
+        raw_transcript=transcript,
         files_mentioned=["src/api.py"],
     )
 
@@ -53,12 +57,16 @@ def matching_session() -> Session:
 @pytest.fixture
 def non_overlapping_session() -> Session:
     """A session that has no file overlap with the commit."""
+    transcript = (
+        "Human: Worked on styles.css and index.html today.\n\n"
+        "Assistant: Great, the CSS looks good."
+    )
     return Session(
         session_id="session-no-match",
         source=SessionSource.CURSOR,
         start_time=BASE_TIME - timedelta(hours=1),
         end_time=BASE_TIME - timedelta(minutes=10),
-        raw_transcript="Human: Worked on styles.css and index.html today.\n\nAssistant: Great, the CSS looks good.",
+        raw_transcript=transcript,
         files_mentioned=["styles.css", "index.html"],
     )
 
@@ -152,12 +160,12 @@ def test_link_commit_finds_matching_session(
 
 def test_link_commit_returns_empty_for_no_match(sample_commit, non_overlapping_session):
     pairs = link_commit(sample_commit, [non_overlapping_session])
-    assert pairs == []
+    assert not pairs
 
 
 def test_link_commit_excludes_out_of_window(sample_commit, out_of_window_session):
     pairs = link_commit(sample_commit, [out_of_window_session])
-    assert pairs == []
+    assert not pairs
 
 
 def test_pair_id_format(sample_commit, matching_session):
@@ -180,4 +188,4 @@ def test_link_all_basic(sample_commit, matching_session, non_overlapping_session
 
 def test_link_all_returns_empty_when_no_sessions(sample_commit):
     pairs = link_all([sample_commit], [])
-    assert pairs == []
+    assert not pairs

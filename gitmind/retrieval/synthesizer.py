@@ -13,7 +13,6 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from gitmind.config import settings
 from gitmind.db import GitMindDB
 from gitmind.models import DecisionArcEntry
 
@@ -26,7 +25,7 @@ class DecisionSynthesizer:
     def __init__(self, db: GitMindDB | None = None):
         self._db = db or GitMindDB()
 
-    def synthesize(self, query: str, function_name: str) -> list[DecisionArcEntry]:
+    def synthesize(self, _query: str, function_name: str) -> list[DecisionArcEntry]:
         """
         Build a chronological decision arc for a function.
 
